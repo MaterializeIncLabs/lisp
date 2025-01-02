@@ -132,6 +132,53 @@ WITH MUTUALLY RECURSIVE
         WHERE jsonb_typeof(e.expr) = 'array'
             AND e.expr->>0 IN ('not')
             AND e.result IS NULL
+
+        UNION 
+
+        -- quote special form
+        SELECT prog_id, depth, expr, expr->1
+        FROM eval
+        WHERE jsonb_typeof(expr) = 'array'
+            AND result IS NULL
+            AND expr->>0 = 'quote'
+
+        UNION 
+    
+        -- cons special form
+        SELECT
+            e.prog_id,
+            e.depth,
+            e.expr,
+            arg1.result || arg2.result
+        FROM eval e
+        JOIN eval arg1 ON arg1.prog_id = e.prog_id 
+            AND arg1.expr = e.expr->1
+            AND arg1.result IS NOT NULL
+        JOIN eval arg2 ON arg2.prog_id = e.prog_id 
+            AND arg2.expr = e.expr->2
+            AND arg2.result IS NOT NULL
+        WHERE jsonb_typeof(e.expr) = 'array'
+            AND e.result IS NULL
+            AND e.expr->>0 = 'cons'
+
+        UNION 
+
+        -- car and cdr special form
+        SELECT
+            e.prog_id,
+            e.depth,
+            e.expr,
+            CASE e.expr->>0
+                WHEN 'car' THEN arg.result->0
+                WHEN 'cdr' THEN arg.result->1
+            END
+        FROM eval e
+        JOIN eval arg ON arg.prog_id = e.prog_id 
+            AND arg.expr = e.expr->1
+            AND arg.result IS NOT NULL
+        WHERE jsonb_typeof(e.expr) = 'array'
+            AND e.result IS NULL
+            AND e.expr->>0 IN ('car', 'cdr')
     )
 
-SELECT * FROM eval WHERE depth = 0;
+SELECT * FROM eval WHERE depth = 0 AND result IS NOT NULL;
