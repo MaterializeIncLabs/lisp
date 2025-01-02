@@ -48,9 +48,40 @@ WITH MUTUALLY RECURSIVE
         UNION ALL 
 
         SELECT prog_id, depth + 1, nested_expr
-        FROM expressions e
+        FROM expressions
         CROSS JOIN LATERAL jsonb_array_elements(expr) AS nested_expr
         WHERE jsonb_typeof(expr) = 'array'
+            AND expr->>0 <> 'if'
+        
+        UNION ALL 
+
+        SELECT prog_id, depth + 1, expr->1
+        FROM expressions
+        WHERE jsonb_typeof(expr) = 'array'
+            AND expr->>0 = 'if'
+
+        UNION ALL
+
+        SELECT prog_id, depth + 1, branch
+        FROM if_branch
+    ),
+
+    if_branch(prog_id int, depth int, expr jsonb, branch jsonb) AS (
+        SELECT 
+            e.prog_id,
+            e.depth,
+            e.expr,
+            CASE cond.result::boolean 
+                WHEN TRUE THEN e.expr->2
+                ELSE e.expr->3
+            END
+        FROM eval e
+        JOIN eval cond ON e.prog_id = cond.prog_id 
+            AND e.expr->1 = cond.expr
+            AND cond.result IS NOT NULL
+        WHERE jsonb_typeof(e.expr) = 'array'
+            AND e.expr->>0 = 'if'
+            AND e.result IS NULL
     ),
 
     eval(prog_id int, depth int, expr jsonb, result jsonb) AS (
@@ -179,6 +210,20 @@ WITH MUTUALLY RECURSIVE
         WHERE jsonb_typeof(e.expr) = 'array'
             AND e.result IS NULL
             AND e.expr->>0 IN ('car', 'cdr')
+
+        UNION 
+
+        -- If statements
+        -- - Join the result of evaulating the branch back to the top level if statement
+        SELECT 
+            if_branch.prog_id,
+            if_branch.depth,
+            if_branch.expr,
+            branch.result
+        FROM if_branch 
+        JOIN eval branch ON if_branch.prog_id = branch.prog_id
+            AND if_branch.branch = branch.expr
+            AND branch.result IS NOT NULL 
     )
 
 SELECT * FROM eval WHERE depth = 0 AND result IS NOT NULL;
