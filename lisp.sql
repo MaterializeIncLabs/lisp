@@ -84,6 +84,20 @@ WITH MUTUALLY RECURSIVE
             AND e.result IS NULL
     ),
 
+    env(prog_id int, depth int, name text, value jsonb) AS (
+        SELECT 
+            e.prog_id,
+            e.depth + 1,
+            binding->>0,
+            v.result
+        FROM eval e
+        CROSS JOIN LATERAL jsonb_array_elements(e.expr->1) AS binding(expr)
+        JOIN eval v ON v.prog_id = e.prog_id 
+            AND v.expr = binding->1
+            AND v.result IS NOT NULL
+        WHERE e.expr->>0 = 'let'
+    ),
+
     eval(prog_id int, depth int, expr jsonb, result jsonb) AS (
         -- Initialize evaluation 
         SELECT prog_id, depth, expr, NULL::jsonb
@@ -223,7 +237,38 @@ WITH MUTUALLY RECURSIVE
         FROM if_branch 
         JOIN eval branch ON if_branch.prog_id = branch.prog_id
             AND if_branch.branch = branch.expr
-            AND branch.result IS NOT NULL 
+            AND branch.result IS NOT NULL
+
+        UNION
+
+        SELECT 
+            e.prog_id,
+            e.depth,
+            e.expr,
+            env.value
+        FROM eval e
+        JOIN env ON  env.prog_id = e.prog_id 
+            AND env.name = e.expr#>>'{}'
+            AND env.depth <= e.depth     
+        WHERE jsonb_typeof(e.expr) = 'string'
+            AND e.result IS NULL
+    
+        UNION 
+
+        -- Let special form
+        SELECT
+            e.prog_id,
+            e.depth,
+            e.expr,
+            body_eval.result
+        FROM eval e
+        JOIN eval body_eval 
+            ON body_eval.prog_id = e.prog_id
+            AND body_eval.expr = e.expr->2
+            AND body_eval.result IS NOT NULL
+        WHERE jsonb_typeof(e.expr) = 'array'
+            AND e.expr->>0 = 'let'
+            AND e.result IS NULL
     )
 
 SELECT * FROM eval WHERE depth = 0 AND result IS NOT NULL;
