@@ -1,45 +1,4 @@
-DELETE FROM lisp_programs;
 
-INSERT INTO lisp_programs VALUES 
-    -- Basic arithmetic
-    (1, '["+", 1, 2]'::jsonb),                                    -- 3
-    (2, '["-", 5, 3]'::jsonb),                                    -- 2
-    (3, '["*", 4, 2]'::jsonb),                                    -- 8
-    (4, '["/", 10, 2]'::jsonb),                                   -- 5
-    
-    -- Nested arithmetic
-    (5, '["+", ["+", 1, 2], ["*", 3, 4]]'::jsonb),               -- 15
-    (6, '["*", ["-", 10, 5], ["/", 15, 3]]'::jsonb),             -- 25
-    
-    -- Basic comparisons
-    (7, '["=", 3, 3]'::jsonb),                                    -- true
-    (8, '["<", 2, 5]'::jsonb),                                    -- true
-    (9, '[">", 10, 5]'::jsonb),                                   -- true
-    (10, '[">=", 5, 5]'::jsonb),                                  -- true
-    (11, '["<=", 3, 5]'::jsonb),                                  -- true
-    
-    -- Comparisons with arithmetic
-    (12, '["=", ["+", 2, 3], 5]'::jsonb),                        -- true
-    (13, '[">", ["*", 3, 4], ["+", 5, 5]]'::jsonb),              -- true
-    
-    -- Basic boolean operations
-    (14, '["and", true, true]'::jsonb),                          -- true
-    (15, '["or", false, true]'::jsonb),                          -- true
-    (16, '["not", false]'::jsonb),                               -- true
-    
-    -- Complex boolean expressions
-    (17, '["and", [">", 5, 3], ["=", ["+", 2, 2], 4]]'::jsonb), -- true
-    (18, '["or", ["<", 10, 5], [">=", ["/", 10, 2], 5]]'::jsonb), -- true
-    
-    -- Complex nested expressions
-    (19, '["and", 
-           ["=", ["+", ["*", 2, 3], 4], 10],
-           ["or", [">", ["/", 10, 2], 4],
-                 ["not", ["=", 3, 4]]]]'::jsonb),                -- true
-    
-    -- Edge cases
-    (20, '["+", ["/", 10, 2], ["*", ["-", 4, 1], 2]]'::jsonb);  -- 11
-    
 WITH MUTUALLY RECURSIVE 
     expressions (prog_id int, depth int, expr jsonb) AS (
         SELECT id, 0, program
@@ -113,21 +72,21 @@ WITH MUTUALLY RECURSIVE
 
         UNION 
 
-        -- Built in arithmetic operators
+        -- Built in operators
         SELECT
             e.prog_id,
             e.depth,
             e.expr,
             CASE e.expr->>0
-                WHEN '+'   THEN to_jsonb(arg1.result::numeric + arg2.result::numeric)
-                WHEN '-'   THEN to_jsonb(arg1.result::numeric - arg2.result::numeric)
-                WHEN '*'   THEN to_jsonb(arg1.result::numeric * arg2.result::numeric)
-                WHEN '/'   THEN to_jsonb(arg1.result::numeric / arg2.result::numeric)
-                WHEN '='   THEN to_jsonb(arg1.result::numeric = arg2.result::numeric) 
-                WHEN '>='  THEN to_jsonb(arg1.result::numeric >= arg2.result::numeric) 
-                WHEN '<='  THEN to_jsonb(arg1.result::numeric <= arg2.result::numeric) 
-                WHEN '>'   THEN to_jsonb(arg1.result::numeric > arg2.result::numeric) 
-                WHEN '<'   THEN to_jsonb(arg1.result::numeric < arg2.result::numeric)
+                WHEN '+'  THEN to_jsonb(arg1.result::numeric + arg2.result::numeric)
+                WHEN '-'  THEN to_jsonb(arg1.result::numeric - arg2.result::numeric)
+                WHEN '*'  THEN to_jsonb(arg1.result::numeric * arg2.result::numeric)
+                WHEN '/'  THEN to_jsonb(arg1.result::numeric / arg2.result::numeric)
+                WHEN '='  THEN to_jsonb(arg1.result::numeric = arg2.result::numeric) 
+                WHEN '>=' THEN to_jsonb(arg1.result::numeric >= arg2.result::numeric) 
+                WHEN '<=' THEN to_jsonb(arg1.result::numeric <= arg2.result::numeric) 
+                WHEN '>'  THEN to_jsonb(arg1.result::numeric > arg2.result::numeric) 
+                WHEN '<'  THEN to_jsonb(arg1.result::numeric < arg2.result::numeric)
             END
         FROM eval e
         JOIN eval arg1 ON e.prog_id = arg1.prog_id
@@ -241,17 +200,20 @@ WITH MUTUALLY RECURSIVE
 
         UNION
 
-        SELECT 
-            e.prog_id,
-            e.depth,
-            e.expr,
-            env.value
-        FROM eval e
-        JOIN env ON  env.prog_id = e.prog_id 
-            AND env.name = e.expr#>>'{}'
-            AND env.depth <= e.depth     
-        WHERE jsonb_typeof(e.expr) = 'string'
-            AND e.result IS NULL
+        SELECT prog_id, depth, expr, value FROM (
+            SELECT DISTINCT ON (e.prog_id, e.depth, e.expr)
+                e.prog_id,
+                e.depth,
+                e.expr,
+                env.value
+            FROM eval e
+            JOIN env ON env.prog_id = e.prog_id
+                AND env.name = e.expr#>>'{}'
+                AND env.depth <= e.depth
+            WHERE jsonb_typeof(e.expr) = 'string'
+                AND e.result IS NULL
+            ORDER BY e.prog_id, e.depth, e.expr, env.depth DESC
+        )
     
         UNION 
 
@@ -272,3 +234,4 @@ WITH MUTUALLY RECURSIVE
     )
 
 SELECT * FROM eval WHERE depth = 0 AND result IS NOT NULL;
+
