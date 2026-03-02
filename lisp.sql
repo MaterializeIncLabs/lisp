@@ -213,7 +213,7 @@ WITH MUTUALLY RECURSIVE
         SELECT call_stack,
                frame_pointer,
                expr,
-               expr - 0
+               expr->1
         FROM workset
         WHERE jsonb_typeof(expr) = 'array'
           AND expr->>0 = 'quote'
@@ -228,7 +228,7 @@ WITH MUTUALLY RECURSIVE
             ws.call_stack,
             ws.frame_pointer,
             ws.expr,
-            arg1.result || arg2.result
+            jsonb_build_array(arg1.result, arg2.result)
         FROM workset ws
         JOIN resultset arg1 
           ON arg1.call_stack = ws.call_stack
