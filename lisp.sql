@@ -101,7 +101,7 @@ WITH MUTUALLY RECURSIVE
         FROM workset
         CROSS JOIN LATERAL jsonb_array_elements(expr) AS nested_expr
         WHERE jsonb_typeof(expr) = 'array'
-          AND expr->>0 NOT IN ('if', 'defun', 'quote')
+          AND expr->>0 NOT IN ('if', 'defun', 'defmacro', 'quote')
 
         UNION
 
@@ -136,6 +136,16 @@ WITH MUTUALLY RECURSIVE
                frame_pointer + 1,
                let
         FROM function_call
+
+        UNION
+
+        --------------------------------------------------------------------------
+        -- 6) Macro expansion: expanded code re-enters workset for evaluation.
+        --------------------------------------------------------------------------
+        SELECT call_stack,
+               frame_pointer + 1,
+               expanded
+        FROM macro_expansion
     ),
 
     -- ==========================================================================
@@ -313,6 +323,71 @@ WITH MUTUALLY RECURSIVE
     ),
 
     -- ==========================================================================
+    -- Macro Definitions: macro_table
+    -- ==========================================================================
+    -- Captures (defmacro name params body).
+    -- Normalizes single param to array for uniform handling.
+    macro_table(name text, params jsonb, body jsonb) AS (
+        SELECT expr->>1,
+               CASE jsonb_typeof(expr->2)
+                   WHEN 'array' THEN expr->2
+                   ELSE jsonb_build_array(expr->2)
+               END,
+               expr->3
+        FROM workset
+        WHERE expr->>0 = 'defmacro'
+    ),
+
+    -- ==========================================================================
+    -- Macro Substitution: macro_sub
+    -- ==========================================================================
+    -- Iteratively substitutes macro parameters into the body template.
+    -- Each iteration replaces one parameter with the corresponding unevaluated arg.
+    macro_sub(call_stack bigint list, frame_pointer int, expr jsonb, name text, current_body text, param_idx int) AS (
+        -- Seed: raw body template, no substitutions yet
+        SELECT ws.call_stack, ws.frame_pointer, ws.expr, mt.name, mt.body::text, 0
+        FROM workset ws
+        JOIN macro_table mt ON ws.expr->>0 = mt.name
+        WHERE jsonb_typeof(ws.expr) = 'array'
+          AND ws.expr->1 IS NOT NULL
+
+        UNION
+
+        -- Each iteration: substitute one parameter
+        SELECT ms.call_stack, ms.frame_pointer, ms.expr, ms.name,
+               replace(ms.current_body,
+                       '"' || (mt.params->>ms.param_idx) || '"',
+                       (ms.expr->(ms.param_idx + 1))::text),
+               ms.param_idx + 1
+        FROM macro_sub ms
+        JOIN macro_table mt ON ms.name = mt.name
+        WHERE ms.param_idx < jsonb_array_length(mt.params)
+    ),
+
+    -- ==========================================================================
+    -- Macro Expansion: macro_expansion
+    -- ==========================================================================
+    -- Extracts fully-substituted result when all params have been replaced.
+    macro_expansion(call_stack bigint list, frame_pointer int, expr jsonb, expanded jsonb) AS (
+        SELECT ms.call_stack, ms.frame_pointer, ms.expr, ms.current_body::jsonb
+        FROM macro_sub ms
+        JOIN macro_table mt ON ms.name = mt.name
+        WHERE ms.param_idx = jsonb_array_length(mt.params)
+    ),
+
+    -- ==========================================================================
+    -- Macro Evaluation: macro_eval
+    -- ==========================================================================
+    -- Bridges the original macro call to the result of the expanded expression.
+    macro_eval(call_stack bigint list, frame_pointer int, expr jsonb, result jsonb) AS (
+        SELECT me.call_stack, me.frame_pointer, me.expr, rs.result
+        FROM macro_expansion me
+        JOIN resultset rs
+          ON rs.call_stack = me.call_stack
+         AND rs.expr = me.expanded
+    ),
+
+    -- ==========================================================================
     -- Function Application: function_call
     -- ==========================================================================
     -- Detects (f arg), looks up (f) in vtable, and builds a let expression
@@ -444,6 +519,7 @@ WITH MUTUALLY RECURSIVE
         UNION SELECT * FROM function_eval
         UNION SELECT * FROM variable_binding
         UNION SELECT * FROM let_eval
+        UNION SELECT * FROM macro_eval
     )
 
 -- ============================================================================
