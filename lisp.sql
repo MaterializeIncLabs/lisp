@@ -339,17 +339,72 @@ WITH MUTUALLY RECURSIVE
     ),
 
     -- ==========================================================================
-    -- Macro Substitution: macro_sub
+    -- Macro Body Bindings: macro_body_bindings
     -- ==========================================================================
-    -- Iteratively substitutes macro parameters into the body template.
-    -- Each iteration replaces one parameter with the corresponding unevaluated arg.
-    macro_sub(call_stack bigint list, frame_pointer int, expr jsonb, name text, current_body text, param_idx int) AS (
-        -- Seed: raw body template, no substitutions yet
-        SELECT ws.call_stack, ws.frame_pointer, ws.expr, mt.name, mt.body::text, 0
+    -- Extracts the names of variables bound by top-level 'let' forms inside
+    -- macro body templates. These are the identifiers that need to be
+    -- alpha-renamed during expansion to prevent variable capture (hygiene).
+    --
+    -- Each variable gets a positional index (var_idx) so the renaming pass
+    -- (macro_rename) can process them one at a time in a deterministic order.
+    macro_body_bindings(name text, var_idx int, var_name text) AS (
+        SELECT mt.name, idx.i, mt.body->1->idx.i->>0
+        FROM macro_table mt
+        CROSS JOIN LATERAL generate_series(0, jsonb_array_length(mt.body->1) - 1) AS idx(i)
+        WHERE mt.body->>0 = 'let'
+    ),
+
+    -- ==========================================================================
+    -- Macro Hygienic Rename: macro_rename
+    -- ==========================================================================
+    -- Alpha-renames let-bound variables in the RAW macro body template BEFORE
+    -- parameter substitution. This ensures that call-site arguments substituted
+    -- later are not accidentally renamed, preventing variable capture.
+    --
+    -- Unique name format: __hyg_<original>_<hash>
+    --   where <hash> = crc32(call_stack || frame_pointer || macro_name)
+    macro_rename(call_stack bigint list, frame_pointer int, expr jsonb,
+                 name text, current_body text, rename_idx int) AS (
+        -- Seed: start from the raw macro body template
+        SELECT ws.call_stack, ws.frame_pointer, ws.expr, mt.name,
+               mt.body::text, 0
         FROM workset ws
         JOIN macro_table mt ON ws.expr->>0 = mt.name
         WHERE jsonb_typeof(ws.expr) = 'array'
           AND ws.expr->1 IS NOT NULL
+
+        UNION
+
+        -- Each iteration: rename the variable at position rename_idx to its gensym.
+        SELECT mr.call_stack, mr.frame_pointer, mr.expr, mr.name,
+               replace(mr.current_body,
+                       '"' || mbb.var_name || '"',
+                       '"__hyg_' || mbb.var_name || '_' ||
+                       crc32(mr.call_stack::text || '_' || mr.frame_pointer::text || '_' || mr.name)::text
+                       || '"'),
+               mr.rename_idx + 1
+        FROM macro_rename mr
+        JOIN macro_body_bindings mbb
+          ON mr.name = mbb.name
+         AND mr.rename_idx = mbb.var_idx
+    ),
+
+    -- ==========================================================================
+    -- Macro Substitution: macro_sub
+    -- ==========================================================================
+    -- Iteratively substitutes macro parameters into the (already renamed) body.
+    -- Seeds from macro_rename's final output rather than the raw body, so that
+    -- let-bound variables have already been alpha-renamed for hygiene.
+    macro_sub(call_stack bigint list, frame_pointer int, expr jsonb, name text, current_body text, param_idx int) AS (
+        -- Seed: renamed body template (or raw body if no let-bindings to rename)
+        SELECT mr.call_stack, mr.frame_pointer, mr.expr, mr.name,
+               mr.current_body, 0
+        FROM macro_rename mr
+        WHERE mr.rename_idx = (
+            SELECT COALESCE(max(var_idx) + 1, 0)
+            FROM macro_body_bindings mbb
+            WHERE mbb.name = mr.name
+        )
 
         UNION
 
@@ -367,7 +422,7 @@ WITH MUTUALLY RECURSIVE
     -- ==========================================================================
     -- Macro Expansion: macro_expansion
     -- ==========================================================================
-    -- Extracts fully-substituted result when all params have been replaced.
+    -- Extracts the fully renamed and substituted macro body, ready for evaluation.
     macro_expansion(call_stack bigint list, frame_pointer int, expr jsonb, expanded jsonb) AS (
         SELECT ms.call_stack, ms.frame_pointer, ms.expr, ms.current_body::jsonb
         FROM macro_sub ms

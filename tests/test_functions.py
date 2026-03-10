@@ -50,3 +50,24 @@ def test_tower_of_hanoi(run_programs):
     for i, (expr, expected) in enumerate(HANOI_CALLS):
         idx = len(HANOI_DEFINITIONS) + i
         assert results[idx] == expected, f"{expr}: expected {expected}, got {results[idx]}"
+
+
+HYGIENE_DEFINITIONS = [
+    # Macro that introduces a let-bound variable "tmp"
+    ["defmacro", "swap-add", ["a", "b"], ["let", [["tmp", "a"]], ["+", "tmp", "b"]]],
+]
+
+HYGIENE_CALLS = [
+    # Simple case — no variable capture risk
+    (["swap-add", 3, 4], 7),
+    # Call site has a variable named "tmp" — should NOT be captured
+    (["let", [["tmp", 10]], ["swap-add", "tmp", 20]], 30),
+]
+
+
+def test_macro_hygiene(run_programs):
+    programs = HYGIENE_DEFINITIONS + [expr for expr, _ in HYGIENE_CALLS]
+    results = run_programs(programs)
+    for i, (expr, expected) in enumerate(HYGIENE_CALLS):
+        idx = len(HYGIENE_DEFINITIONS) + i
+        assert results[idx] == expected, f"{expr}: expected {expected}, got {results[idx]}"
