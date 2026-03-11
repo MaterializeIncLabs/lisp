@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "materialize-docs": {
+      "source": "MaterializeInc/agent-skills",
+      "sourceType": "github",
+      "computedHash": "d13f2d17e5570301e61b5aca3eb1d9f9b3023a968ef0331e9c7d53446bd09eda"
+    }
+  }
+}

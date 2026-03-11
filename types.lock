@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "objects": {
+    "materialize.storage.lisp_programs": {
+      "id": {
+        "type": "integer",
+        "nullable": true
+      },
+      "program": {
+        "type": "jsonb",
+        "nullable": true
+      }
+    }
+  }
+}
